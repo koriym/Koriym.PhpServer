@@ -18,3 +18,10 @@ $server->start();
 
 $server->stop();
 ```
+
+You can also specify a public web directory.
+
+```php
+$server = new PhpServer('127.0.0.1:8080', 'path/to/public');
+```
+

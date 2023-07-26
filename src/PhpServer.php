@@ -8,6 +8,7 @@ use RuntimeException;
 use Symfony\Component\Process\Process;
 
 use function error_log;
+use function is_dir;
 use function register_shutdown_function;
 use function sprintf;
 use function str_contains;
@@ -21,14 +22,22 @@ final class PhpServer
 
     private Process $process;
 
-    public function __construct(private string $host, string $index, string|null $phpBinary = null)
+    public function __construct(private string $host, string $docroot, string|null $phpBinary = null)
     {
         $phpBinary ??= PHP_BINARY;
-        $this->process = new Process([
+        $this->process = is_dir($docroot) ?
+        new Process([
             $phpBinary,
             '-S',
             $host,
-            $index,
+            '-t',
+            $docroot,
+        ]) :
+        new Process([
+            $phpBinary,
+            '-S',
+            $host,
+            $docroot,
         ]);
         register_shutdown_function(function (): void {
             // @codeCoverageIgnoreStart

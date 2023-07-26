@@ -45,4 +45,14 @@ class PhpServerTest extends TestCase
         $output = curl_exec($this->ch);
         $this->assertFalse($output);
     }
+
+    public function testStartWithDirectory(): PhpServer
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake');
+        $server->start();
+        $output = curl_exec($this->ch);
+        $this->assertSame('Hello World', $output);
+
+        return $server;
+    }
 }

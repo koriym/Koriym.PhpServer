@@ -11,4 +11,3 @@ jobs:
     with:
       old_stable: '["8.0", "8.1"]'
       current_stable: 8.2
-      script: demo/run.php
