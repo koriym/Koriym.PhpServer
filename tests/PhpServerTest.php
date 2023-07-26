@@ -24,6 +24,7 @@ class PhpServerTest extends TestCase
         curl_setopt($ch, CURLOPT_URL, 'http:/127.0.0.1:8099/');
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         $this->ch = $ch;
+
         parent::setUp();
     }
 
