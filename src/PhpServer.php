@@ -19,10 +19,9 @@ final class PhpServer
 {
     private const SIGTERM = 143;
 
-    /** @phpstan-var Process<string> */
     private Process $process;
 
-    public function __construct(private string $host, string $index, string $phpBinary = null)
+    public function __construct(private string $host, string $index, string|null $phpBinary = null)
     {
         $phpBinary ??= PHP_BINARY;
         $this->process = new Process([

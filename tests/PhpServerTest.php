@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Koriym\PhpServer;
 
+use CurlHandle;
 use PHPUnit\Framework\TestCase;
 
 use function curl_exec;
@@ -15,8 +16,7 @@ use const CURLOPT_URL;
 
 class PhpServerTest extends TestCase
 {
-    /** @var resource */
-    private \CurlHandle $ch;
+    private CurlHandle $ch;
 
     public function setUp(): void
     {
