@@ -1,13 +1,20 @@
 # koriym/php-server
 
+## Simple PHP built-in server utility for testing
+
+Do you ever need to test using a http server? This utility will fast launch a built-in PHP server just when you need it.
+
 ## Installation
 
-    composer install
+    composer require koriym/php-server
 
-## Available Commands
+## Usage
 
-    composer test              // Run unit test
-    composer tests             // Test and quality checks
-    composer cs-fix            // Fix the coding style
-    composer sa                // Run static analysis tools
-    composer run-script --list // List all commands
+```php
+$server = new PhpServer('127.0.0.1:8080', 'path/to/index.php');
+$server->start();
+
+// your http test here
+
+$server->stop();
+```
