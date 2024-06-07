@@ -14,7 +14,7 @@
     },
     "require-dev": {
         "bamarni/composer-bin-plugin": "^1.8",
-        "phpunit/phpunit": "^9.5",
+        "phpunit/phpunit": "^9.6.19",
         "ext-curl": "*",
         "psalm/plugin-phpunit": "^0.18.4"
     },
