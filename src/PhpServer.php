@@ -65,7 +65,9 @@ final class PhpServer
         $exitCode = $this->process->stop();
         $errorOutput = $this->process->getErrorOutput();
         if ($exitCode !== self::SIGTERM && ! str_contains($errorOutput, 'Development Server')) {
+            // @codeCoverageIgnoreStart
             throw new RuntimeException(sprintf('code:%s msg:%s', (string) $exitCode, $errorOutput));
+            // @codeCoverageIgnoreEnd
         }
     }
 }
