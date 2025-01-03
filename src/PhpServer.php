@@ -63,8 +63,9 @@ final class PhpServer
     public function stop(): void
     {
         $exitCode = $this->process->stop();
-        if ($exitCode !== self::SIGTERM && $exitCode !== 0) {  // 0（正常終了）も許容
-            throw new RuntimeException(sprintf('code:%s msg:%s', (string) $exitCode, $this->process->getErrorOutput()));
+        $errorOutput = $this->process->getErrorOutput();
+        if ($exitCode !== self::SIGTERM && ! str_contains($errorOutput, 'Development Server')) {
+            throw new RuntimeException(sprintf('code:%s msg:%s', (string) $exitCode, $errorOutput));
         }
     }
 }
