@@ -8,6 +8,7 @@ use RuntimeException;
 use Symfony\Component\Process\Process;
 
 use function array_slice;
+use function dirname;
 use function explode;
 use function fclose;
 use function file_get_contents;
@@ -15,7 +16,9 @@ use function filesize;
 use function fsockopen;
 use function implode;
 use function is_dir;
+use function is_file;
 use function is_resource;
+use function is_writable;
 use function max;
 use function microtime;
 use function register_shutdown_function;
@@ -25,6 +28,7 @@ use function substr;
 use function sys_get_temp_dir;
 use function tempnam;
 use function trim;
+use function unlink;
 use function usleep;
 
 use const DIRECTORY_SEPARATOR;
@@ -39,6 +43,8 @@ final class PhpServer
 
     private Process $process;
     private string $logFile;
+    private bool $ownsLogFile;
+    private bool $stopped = false;
 
     /**
      * Server output goes to $logFile rather than to a pipe. A pipe that nobody reads fills up
@@ -51,20 +57,26 @@ final class PhpServer
         string|null $logFile = null,
     ) {
         $phpBinary ??= PHP_BINARY;
+        $this->ownsLogFile = $logFile === null;
         $this->logFile = $logFile ?? $this->tempLogFile();
+        $this->assertLogFileIsWritable();
         // Placeholders let Symfony Process quote each value for the platform; escapeshellarg()
-        // would replace % and ! with spaces on Windows.
-        $target = is_dir($docroot) ? '-t "${:DOCROOT}"' : '"${:DOCROOT}"';
-        $command = sprintf('"${:PHP_BINARY}" -S "${:HOST}" %s >> "${:LOG_FILE}" 2>&1', $target);
+        // would replace % and ! with spaces on Windows. The names are also exported to the
+        // server process, so they carry the package prefix to keep them out of the application.
+        $target = is_dir($docroot) ? '-t "${:KORIYM_PHP_SERVER_DOCROOT}"' : '"${:KORIYM_PHP_SERVER_DOCROOT}"';
+        $command = sprintf(
+            '"${:KORIYM_PHP_SERVER_BINARY}" -S "${:KORIYM_PHP_SERVER_HOST}" %s >> "${:KORIYM_PHP_SERVER_LOG_FILE}" 2>&1',
+            $target,
+        );
         // exec replaces the shell so that stop() signals PHP itself, not sh.
         $this->process = Process::fromShellCommandline(
             DIRECTORY_SEPARATOR === '\\' ? $command : 'exec ' . $command,
             null,
             [
-                'PHP_BINARY' => $phpBinary,
-                'HOST' => $host,
-                'DOCROOT' => $docroot,
-                'LOG_FILE' => $this->logFile,
+                'KORIYM_PHP_SERVER_BINARY' => $phpBinary,
+                'KORIYM_PHP_SERVER_HOST' => $host,
+                'KORIYM_PHP_SERVER_DOCROOT' => $docroot,
+                'KORIYM_PHP_SERVER_LOG_FILE' => $this->logFile,
             ],
         );
         register_shutdown_function(function (): void {
@@ -74,6 +86,18 @@ final class PhpServer
         });
     }
 
+    public function __destruct()
+    {
+        if (! $this->ownsLogFile || ! is_file($this->logFile)) {
+            return;
+        }
+
+        // @codeCoverageIgnoreStart
+        // The shutdown function above has already stopped the server, so the file is closed.
+        @unlink($this->logFile);
+        // @codeCoverageIgnoreEnd
+    }
+
     public function start(): void
     {
         if ($this->isListening()) {
@@ -81,12 +105,22 @@ final class PhpServer
         }
 
         $this->process->start();
+        $this->stopped = false;
         $this->waitUntilListening();
     }
 
-    /** @throws RuntimeException When the server died on its own before being stopped. */
+    /**
+     * Stopping twice is harmless: a stop requested by this class is remembered, and a server
+     * that was never started is left alone.
+     *
+     * @throws RuntimeException When the server died on its own before being stopped.
+     */
     public function stop(): void
     {
+        if (! $this->process->isStarted() || $this->stopped) {
+            return;
+        }
+
         if (! $this->process->isRunning()) {
             // @codeCoverageIgnoreStart
             throw new RuntimeException(sprintf(
@@ -98,6 +132,7 @@ final class PhpServer
         }
 
         $this->process->stop();
+        $this->stopped = true;
     }
 
     public function getLogFile(): string
@@ -122,6 +157,7 @@ final class PhpServer
 
         // @codeCoverageIgnoreStart
         $this->process->stop();
+        $this->stopped = true;
 
         throw new RuntimeException(sprintf('Server did not start listening on %s: %s', $this->host, $this->logTail()));
         // @codeCoverageIgnoreEnd
@@ -143,6 +179,19 @@ final class PhpServer
         return true;
     }
 
+    private function assertLogFileIsWritable(): void
+    {
+        $dir = dirname($this->logFile);
+        if (
+            ! is_dir($dir)
+            || ! is_writable($dir)
+            || is_dir($this->logFile)
+            || (is_file($this->logFile) && ! is_writable($this->logFile))
+        ) {
+            throw new RuntimeException(sprintf('Log file is not writable: %s', $this->logFile));
+        }
+    }
+
     private function tempLogFile(): string
     {
         $file = tempnam(sys_get_temp_dir(), 'php-server-');
@@ -155,6 +204,10 @@ final class PhpServer
 
     private function logTail(): string
     {
+        if (! is_file($this->logFile)) {
+            return '';
+        }
+
         $size = filesize($this->logFile);
         if ($size === false || $size === 0) {
             return ''; // @codeCoverageIgnore

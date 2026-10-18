@@ -109,4 +109,39 @@ class PhpServerTest extends TestCase
             $first->stop();
         }
     }
+
+    public function testStopIsIdempotent(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php');
+        $server->start();
+        $server->stop();
+        $server->stop();
+    }
+
+    public function testStopBeforeStartDoesNothing(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php');
+        $server->stop();
+    }
+
+    public function testLogDirectoryMustExist(): void
+    {
+        $logFile = sys_get_temp_dir() . '/php-server-missing-' . uniqid() . '/server.log';
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Log file is not writable');
+        new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php', null, $logFile);
+    }
+
+    public function testServerEnvironmentIsNamespaced(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/env.php');
+        $server->start();
+        $output = curl_exec($this->ch);
+        $server->stop();
+
+        $this->assertSame('127.0.0.1:8099|clean', $output);
+    }
 }
