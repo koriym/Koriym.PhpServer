@@ -32,7 +32,6 @@ use const PHP_EOL;
 
 final class PhpServer
 {
-    private const SIGTERM = 143;
     private const START_TIMEOUT_SECONDS = 5.0;
     private const LOG_TAIL_LINES = 20;
 
@@ -78,14 +77,20 @@ final class PhpServer
         $this->waitUntilListening();
     }
 
+    /** @throws RuntimeException When the server died on its own before being stopped. */
     public function stop(): void
     {
-        $exitCode = $this->process->stop();
-        if ($exitCode !== null && $exitCode !== self::SIGTERM) {
+        if (! $this->process->isRunning()) {
             // @codeCoverageIgnoreStart
-            throw new RuntimeException(sprintf('code:%s log:%s', (string) $exitCode, $this->logTail()));
+            throw new RuntimeException(sprintf(
+                'Server exited with code %s: %s',
+                (string) $this->process->getExitCode(),
+                $this->logTail(),
+            ));
             // @codeCoverageIgnoreEnd
         }
+
+        $this->process->stop();
     }
 
     public function getLogFile(): string
@@ -98,9 +103,7 @@ final class PhpServer
         $deadline = microtime(true) + self::START_TIMEOUT_SECONDS;
         while (microtime(true) < $deadline) {
             if (! $this->process->isRunning()) {
-                // @codeCoverageIgnoreStart
                 throw new RuntimeException(sprintf('Server exited during start-up: %s', $this->logTail()));
-                // @codeCoverageIgnoreEnd
             }
 
             if ($this->isListening()) {

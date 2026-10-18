@@ -86,6 +86,15 @@ class PhpServerTest extends TestCase
         $this->assertStringContainsString('Accepted', (string) file_get_contents($logFile));
     }
 
+    public function testStartFailsWithLogWhenServerExits(): void
+    {
+        $server = new PhpServer('127.0.0.1:99999', __DIR__ . '/Fake/index.php');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Invalid address: 127.0.0.1:99999');
+        $server->start();
+    }
+
     public function testStartFailsFastWhenPortIsInUse(): void
     {
         $first = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php');
