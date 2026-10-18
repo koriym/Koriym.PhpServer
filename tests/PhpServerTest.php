@@ -172,4 +172,19 @@ class PhpServerTest extends TestCase
 
         $this->assertSame('Hello World', $output);
     }
+
+    /** start() already reported why the server died; stopping it again must not throw. */
+    public function testStopAfterFailedStartIsHarmless(): void
+    {
+        $server = new PhpServer('127.0.0.1:99999', __DIR__ . '/Fake/index.php');
+
+        try {
+            $server->start();
+            $this->fail('start() should have thrown');
+        } catch (RuntimeException) {
+            $this->addToAssertionCount(1);
+        }
+
+        $server->stop();
+    }
 }

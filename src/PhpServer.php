@@ -144,6 +144,9 @@ final class PhpServer
         $deadline = microtime(true) + self::START_TIMEOUT_SECONDS;
         while (microtime(true) < $deadline) {
             if (! $this->process->isRunning()) {
+                // The failure is reported here, so a later stop() from cleanup has nothing to add.
+                $this->stopped = true;
+
                 throw new RuntimeException(sprintf('Server exited during start-up: %s', $this->logTail()));
             }
 
