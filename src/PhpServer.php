@@ -7,38 +7,60 @@ namespace Koriym\PhpServer;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 
-use function error_log;
+use function array_slice;
+use function escapeshellarg;
+use function explode;
+use function fclose;
+use function file_get_contents;
+use function fsockopen;
+use function implode;
 use function is_dir;
+use function is_resource;
+use function microtime;
 use function register_shutdown_function;
 use function sprintf;
-use function str_contains;
-use function strpos;
+use function strrpos;
+use function substr;
+use function sys_get_temp_dir;
+use function tempnam;
+use function trim;
+use function usleep;
 
+use const DIRECTORY_SEPARATOR;
 use const PHP_BINARY;
+use const PHP_EOL;
 
 final class PhpServer
 {
     private const SIGTERM = 143;
+    private const START_TIMEOUT_SECONDS = 5.0;
+    private const LOG_TAIL_LINES = 20;
 
     private Process $process;
+    private string $logFile;
 
-    public function __construct(private string $host, string $docroot, string|null $phpBinary = null)
-    {
+    /**
+     * Server output goes to $logFile rather than to a pipe. A pipe that nobody reads fills up
+     * after about 64 KB, after which the server blocks on its next write and stops answering.
+     */
+    public function __construct(
+        private string $host,
+        string $docroot,
+        string|null $phpBinary = null,
+        string|null $logFile = null,
+    ) {
         $phpBinary ??= PHP_BINARY;
-        $this->process = is_dir($docroot) ?
-        new Process([
-            $phpBinary,
-            '-S',
-            $host,
-            '-t',
-            $docroot,
-        ]) :
-        new Process([
-            $phpBinary,
-            '-S',
-            $host,
-            $docroot,
-        ]);
+        $this->logFile = $logFile ?? $this->tempLogFile();
+        $target = is_dir($docroot) ? '-t ' . escapeshellarg($docroot) : escapeshellarg($docroot);
+        $command = sprintf(
+            '%s -S %s %s >> %s 2>&1',
+            escapeshellarg($phpBinary),
+            escapeshellarg($host),
+            $target,
+            escapeshellarg($this->logFile),
+        );
+        // exec replaces the shell so that stop() signals PHP itself, not sh.
+        $this->process = Process::fromShellCommandline(DIRECTORY_SEPARATOR === '\\' ? $command : 'exec ' . $command);
         register_shutdown_function(function (): void {
             // @codeCoverageIgnoreStart
             $this->process->stop();
@@ -48,26 +70,86 @@ final class PhpServer
 
     public function start(): void
     {
-        $this->process->start();
-        $this->process->waitUntil(function (string $type, string $output): bool {
-            if ($type === 'err' && ! str_contains($output, 'started')) {
-                // @codeCoverageIgnoreStart
-                error_log($output);
-                // @codeCoverageIgnoreEnd
-            }
+        if ($this->isListening()) {
+            throw new RuntimeException(sprintf('%s is already in use', $this->host));
+        }
 
-            return (bool) strpos($output, $this->host);
-        });
+        $this->process->start();
+        $this->waitUntilListening();
     }
 
     public function stop(): void
     {
         $exitCode = $this->process->stop();
-        $errorOutput = $this->process->getErrorOutput();
-        if ($exitCode !== self::SIGTERM && ! str_contains($errorOutput, 'Development Server')) {
+        if ($exitCode !== null && $exitCode !== self::SIGTERM) {
             // @codeCoverageIgnoreStart
-            throw new RuntimeException(sprintf('code:%s msg:%s', (string) $exitCode, $errorOutput));
+            throw new RuntimeException(sprintf('code:%s log:%s', (string) $exitCode, $this->logTail()));
             // @codeCoverageIgnoreEnd
         }
+    }
+
+    public function getLogFile(): string
+    {
+        return $this->logFile;
+    }
+
+    private function waitUntilListening(): void
+    {
+        $deadline = microtime(true) + self::START_TIMEOUT_SECONDS;
+        while (microtime(true) < $deadline) {
+            if (! $this->process->isRunning()) {
+                // @codeCoverageIgnoreStart
+                throw new RuntimeException(sprintf('Server exited during start-up: %s', $this->logTail()));
+                // @codeCoverageIgnoreEnd
+            }
+
+            if ($this->isListening()) {
+                return;
+            }
+
+            usleep(20_000);
+        }
+
+        // @codeCoverageIgnoreStart
+        throw new RuntimeException(sprintf('Server did not start listening on %s: %s', $this->host, $this->logTail()));
+        // @codeCoverageIgnoreEnd
+    }
+
+    private function isListening(): bool
+    {
+        $colon = strrpos($this->host, ':');
+        $address = $colon === false ? $this->host : substr($this->host, 0, $colon);
+        $port = $colon === false ? 80 : (int) substr($this->host, $colon + 1);
+
+        $socket = @fsockopen($address, $port, timeout: 0.1);
+        if (! is_resource($socket)) {
+            return false;
+        }
+
+        fclose($socket);
+
+        return true;
+    }
+
+    private function tempLogFile(): string
+    {
+        $file = tempnam(sys_get_temp_dir(), 'php-server-');
+        if ($file === false) {
+            throw new RuntimeException('Could not create a log file for the server'); // @codeCoverageIgnore
+        }
+
+        return $file;
+    }
+
+    private function logTail(): string
+    {
+        $log = file_get_contents($this->logFile);
+        if ($log === false) {
+            return ''; // @codeCoverageIgnore
+        }
+
+        $lines = explode(PHP_EOL, trim($log));
+
+        return implode(PHP_EOL, array_slice($lines, -self::LOG_TAIL_LINES));
     }
 }
