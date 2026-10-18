@@ -6,14 +6,17 @@ namespace Koriym\PhpServer;
 
 use CurlHandle;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use RuntimeException;
 
 use function curl_exec;
 use function curl_init;
 use function curl_setopt;
 use function file_get_contents;
+use function file_put_contents;
 use function sys_get_temp_dir;
 use function uniqid;
+use function unlink;
 
 use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
@@ -143,5 +146,30 @@ class PhpServerTest extends TestCase
         $server->stop();
 
         $this->assertSame('127.0.0.1:8099|clean', $output);
+    }
+
+    /** The tail is read from a file that another process writes, so it can be gone by then. */
+    public function testLogTailIsEmptyWhenTheLogFileIsGone(): void
+    {
+        $logFile = sys_get_temp_dir() . '/php-server-gone-' . uniqid() . '.log';
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php', null, $logFile);
+        file_put_contents($logFile, 'an earlier run');
+        unlink($logFile);
+
+        $logTail = new ReflectionMethod($server, 'logTail');
+        $logTail->setAccessible(true);
+
+        $this->assertSame('', $logTail->invoke($server));
+    }
+
+    /** A wildcard bind address is not connectable on every platform; the probe uses loopback. */
+    public function testStartWithWildcardAddress(): void
+    {
+        $server = new PhpServer('0.0.0.0:8099', __DIR__ . '/Fake/index.php');
+        $server->start();
+        $output = curl_exec($this->ch);
+        $server->stop();
+
+        $this->assertSame('Hello World', $output);
     }
 }

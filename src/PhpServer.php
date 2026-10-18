@@ -88,13 +88,12 @@ final class PhpServer
 
     public function __destruct()
     {
-        if (! $this->ownsLogFile || ! is_file($this->logFile)) {
-            return;
-        }
-
         // @codeCoverageIgnoreStart
-        // The shutdown function above has already stopped the server, so the file is closed.
-        @unlink($this->logFile);
+        // The destructor runs after coverage collection has stopped, once the shutdown
+        // function has stopped the server and closed the file.
+        if ($this->ownsLogFile && is_file($this->logFile)) {
+            @unlink($this->logFile);
+        }
         // @codeCoverageIgnoreEnd
     }
 
@@ -168,6 +167,12 @@ final class PhpServer
         $colon = strrpos($this->host, ':');
         $address = $colon === false ? $this->host : substr($this->host, 0, $colon);
         $port = $colon === false ? 80 : (int) substr($this->host, $colon + 1);
+        // A wildcard bind address is not a connectable target on every platform, so probe loopback.
+        $address = match ($address) {
+            '0.0.0.0' => '127.0.0.1',
+            '[::]' => '[::1]',
+            default => $address,
+        };
 
         $socket = @fsockopen($address, $port, timeout: 0.1);
         if (! is_resource($socket)) {
