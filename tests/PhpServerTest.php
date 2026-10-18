@@ -9,12 +9,16 @@ use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use RuntimeException;
 
+use function chmod;
 use function curl_exec;
 use function curl_init;
 use function curl_setopt;
 use function file_get_contents;
 use function file_put_contents;
+use function mkdir;
+use function rmdir;
 use function sys_get_temp_dir;
+use function touch;
 use function uniqid;
 use function unlink;
 
@@ -136,6 +140,25 @@ class PhpServerTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Log file is not writable');
         new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php', null, $logFile);
+    }
+
+    /** Appending only needs write access to the file itself. */
+    public function testExistingLogFileInReadOnlyDirectoryIsAccepted(): void
+    {
+        $dir = sys_get_temp_dir() . '/php-server-readonly-' . uniqid();
+        $logFile = $dir . '/server.log';
+        mkdir($dir);
+        touch($logFile);
+        chmod($dir, 0555);
+
+        try {
+            $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php', null, $logFile);
+            $this->assertSame($logFile, $server->getLogFile());
+        } finally {
+            chmod($dir, 0755);
+            unlink($logFile);
+            rmdir($dir);
+        }
     }
 
     public function testServerEnvironmentIsNamespaced(): void

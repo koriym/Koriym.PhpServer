@@ -187,15 +187,13 @@ final class PhpServer
         return true;
     }
 
+    /** Appending to an existing file needs write access to the file only, not to its directory. */
     private function assertLogFileIsWritable(): void
     {
-        $dir = dirname($this->logFile);
-        if (
-            ! is_dir($dir)
-            || ! is_writable($dir)
-            || is_dir($this->logFile)
-            || (is_file($this->logFile) && ! is_writable($this->logFile))
-        ) {
+        $writable = is_file($this->logFile)
+            ? is_writable($this->logFile)
+            : ! is_dir($this->logFile) && is_dir(dirname($this->logFile)) && is_writable(dirname($this->logFile));
+        if (! $writable) {
             throw new RuntimeException(sprintf('Log file is not writable: %s', $this->logFile));
         }
     }
