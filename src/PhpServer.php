@@ -8,14 +8,15 @@ use RuntimeException;
 use Symfony\Component\Process\Process;
 
 use function array_slice;
-use function escapeshellarg;
 use function explode;
 use function fclose;
 use function file_get_contents;
+use function filesize;
 use function fsockopen;
 use function implode;
 use function is_dir;
 use function is_resource;
+use function max;
 use function microtime;
 use function register_shutdown_function;
 use function sprintf;
@@ -34,6 +35,7 @@ final class PhpServer
 {
     private const START_TIMEOUT_SECONDS = 5.0;
     private const LOG_TAIL_LINES = 20;
+    private const LOG_TAIL_BYTES = 64 * 1024;
 
     private Process $process;
     private string $logFile;
@@ -50,16 +52,21 @@ final class PhpServer
     ) {
         $phpBinary ??= PHP_BINARY;
         $this->logFile = $logFile ?? $this->tempLogFile();
-        $target = is_dir($docroot) ? '-t ' . escapeshellarg($docroot) : escapeshellarg($docroot);
-        $command = sprintf(
-            '%s -S %s %s >> %s 2>&1',
-            escapeshellarg($phpBinary),
-            escapeshellarg($host),
-            $target,
-            escapeshellarg($this->logFile),
-        );
+        // Placeholders let Symfony Process quote each value for the platform; escapeshellarg()
+        // would replace % and ! with spaces on Windows.
+        $target = is_dir($docroot) ? '-t "${:DOCROOT}"' : '"${:DOCROOT}"';
+        $command = sprintf('"${:PHP_BINARY}" -S "${:HOST}" %s >> "${:LOG_FILE}" 2>&1', $target);
         // exec replaces the shell so that stop() signals PHP itself, not sh.
-        $this->process = Process::fromShellCommandline(DIRECTORY_SEPARATOR === '\\' ? $command : 'exec ' . $command);
+        $this->process = Process::fromShellCommandline(
+            DIRECTORY_SEPARATOR === '\\' ? $command : 'exec ' . $command,
+            null,
+            [
+                'PHP_BINARY' => $phpBinary,
+                'HOST' => $host,
+                'DOCROOT' => $docroot,
+                'LOG_FILE' => $this->logFile,
+            ],
+        );
         register_shutdown_function(function (): void {
             // @codeCoverageIgnoreStart
             $this->process->stop();
@@ -114,6 +121,8 @@ final class PhpServer
         }
 
         // @codeCoverageIgnoreStart
+        $this->process->stop();
+
         throw new RuntimeException(sprintf('Server did not start listening on %s: %s', $this->host, $this->logTail()));
         // @codeCoverageIgnoreEnd
     }
@@ -146,7 +155,12 @@ final class PhpServer
 
     private function logTail(): string
     {
-        $log = file_get_contents($this->logFile);
+        $size = filesize($this->logFile);
+        if ($size === false || $size === 0) {
+            return ''; // @codeCoverageIgnore
+        }
+
+        $log = file_get_contents($this->logFile, false, null, max(0, $size - self::LOG_TAIL_BYTES));
         if ($log === false) {
             return ''; // @codeCoverageIgnore
         }
