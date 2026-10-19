@@ -17,6 +17,7 @@ use function curl_setopt;
 use function file_get_contents;
 use function file_put_contents;
 use function mkdir;
+use function putenv;
 use function rmdir;
 use function sys_get_temp_dir;
 use function touch;
@@ -39,6 +40,8 @@ class PhpServerTest extends TestCase
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
         $this->ch = $ch;
+        // With workers, /die kills a worker and the server itself keeps running.
+        putenv('PHP_CLI_SERVER_WORKERS');
 
         parent::setUp();
     }
@@ -116,6 +119,20 @@ class PhpServerTest extends TestCase
             $second->start();
         } finally {
             $first->stop();
+        }
+    }
+
+    public function testStartTwiceFails(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php');
+        $server->start();
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Server on 127.0.0.1:8099 is already running');
+            $server->start();
+        } finally {
+            $server->stop();
         }
     }
 

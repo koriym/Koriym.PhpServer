@@ -1,7 +1,7 @@
 <?php
 
-// The built-in server runs the script in its own process, so /die kills the server.
-if ($_SERVER['REQUEST_URI'] === '/die') {
+// The built-in server runs scripts inside the server process, so /die kills the server.
+if (($_SERVER['REQUEST_URI'] ?? '') === '/die') {
     posix_kill(posix_getpid(), 9);
 }
 

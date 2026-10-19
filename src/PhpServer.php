@@ -68,9 +68,8 @@ final class PhpServer
         $this->logFile = $logFile ?? $this->tempLogFile();
         $this->assertLogFileIsWritable();
         // An argument list bypasses the shell, so nothing needs quoting and stop() signals PHP itself.
-        $this->command = is_dir($docroot)
-            ? [$phpBinary ?? PHP_BINARY, '-S', $host, '-t', $docroot]
-            : [$phpBinary ?? PHP_BINARY, '-S', $host, $docroot];
+        $this->command = [$phpBinary ?? PHP_BINARY, '-S', $host];
+        $this->command = is_dir($docroot) ? [...$this->command, '-t', $docroot] : [...$this->command, $docroot];
         register_shutdown_function(function (): void {
             // @codeCoverageIgnoreStart
             if ($this->process !== null) {
@@ -85,7 +84,7 @@ final class PhpServer
     {
         // @codeCoverageIgnoreStart
         // The destructor runs after coverage collection has stopped, once the shutdown
-        // function has stopped the server and closed the file.
+        // function has stopped the server.
         if ($this->ownsLogFile && is_file($this->logFile)) {
             @unlink($this->logFile);
         }
@@ -94,13 +93,18 @@ final class PhpServer
 
     public function start(): void
     {
-        if ($this->isListening()) {
-            throw new RuntimeException(sprintf('%s is already in use', $this->host));
+        $previous = $this->process;
+        if ($previous !== null) {
+            if ($this->isRunning($previous)) {
+                throw new RuntimeException(sprintf('Server on %s is already running', $this->host));
+            }
+
+            // The previous server died without being stopped; release its handle.
+            $this->terminate($previous);
         }
 
-        if ($this->process !== null) {
-            // The previous server died without being stopped; release its handle.
-            $this->terminate($this->process);
+        if ($this->isListening()) {
+            throw new RuntimeException(sprintf('%s is already in use', $this->host));
         }
 
         $process = proc_open($this->command, [
@@ -175,7 +179,8 @@ final class PhpServer
     }
 
     /**
-     * proc_get_status() reports the exit code only on the first call after the exit, so it is kept.
+     * Before PHP 8.3 proc_get_status() reports the exit code only on the first call after the exit,
+     * so it is kept.
      * A signal is reported as 128 + its number, as shells do, instead of -1.
      *
      * @param resource $process
