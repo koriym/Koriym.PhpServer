@@ -14,4 +14,9 @@
             <directory name="vendor"/>
         </ignoreFiles>
     </projectFiles>
-<plugins><pluginClass class="Psalm\PhpUnitPlugin\Plugin"/></plugins></psalm>
+    <issueHandlers>
+        <!-- #[Override] needs PHP 8.3; the package supports 8.0. -->
+        <MissingOverrideAttribute errorLevel="suppress"/>
+    </issueHandlers>
+    <plugins><pluginClass class="Psalm\PhpUnitPlugin\Plugin"/></plugins>
+</psalm>

@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use RuntimeException;
 
+use function assert;
 use function chmod;
 use function copy;
 use function curl_exec;
@@ -29,13 +30,14 @@ use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
 use const CURLOPT_URL;
 
-class PhpServerTest extends TestCase
+final class PhpServerTest extends TestCase
 {
     private CurlHandle $ch;
 
     public function setUp(): void
     {
         $ch = curl_init();
+        assert($ch instanceof CurlHandle);
         curl_setopt($ch, CURLOPT_URL, 'http://127.0.0.1:8099/');
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
@@ -279,13 +281,14 @@ class PhpServerTest extends TestCase
     {
         $server = new PhpServer('127.0.0.1:99999', __DIR__ . '/Fake/index.php');
 
+        $thrown = false;
         try {
             $server->start();
-            $this->fail('start() should have thrown');
         } catch (RuntimeException) {
-            $this->addToAssertionCount(1);
+            $thrown = true;
         }
 
+        $this->assertTrue($thrown);
         $server->stop();
     }
 }
