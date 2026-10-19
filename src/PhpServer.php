@@ -98,6 +98,11 @@ final class PhpServer
             throw new RuntimeException(sprintf('%s is already in use', $this->host));
         }
 
+        if ($this->process !== null) {
+            // The previous server died without being stopped; release its handle.
+            $this->terminate($this->process);
+        }
+
         $process = proc_open($this->command, [
             0 => ['pipe', 'r'],
             1 => ['file', $this->logFile, 'a'],
@@ -126,13 +131,13 @@ final class PhpServer
         }
 
         if (! $this->isRunning($process)) {
-            // @codeCoverageIgnoreStart
+            $this->terminate($process);
+
             throw new RuntimeException(sprintf(
                 'Server exited with code %s: %s',
                 (string) $this->exitCode,
                 $this->logTail(),
             ));
-            // @codeCoverageIgnoreEnd
         }
 
         $this->terminate($process);
@@ -171,6 +176,7 @@ final class PhpServer
 
     /**
      * proc_get_status() reports the exit code only on the first call after the exit, so it is kept.
+     * A signal is reported as 128 + its number, as shells do, instead of -1.
      *
      * @param resource $process
      *
@@ -180,7 +186,7 @@ final class PhpServer
     {
         $status = proc_get_status($process);
         if (! $status['running'] && $this->exitCode === null) {
-            $this->exitCode = $status['exitcode'];
+            $this->exitCode = $status['signaled'] ? 128 + $status['termsig'] : $status['exitcode'];
         }
 
         return $status['running'];

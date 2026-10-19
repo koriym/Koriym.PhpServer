@@ -22,6 +22,7 @@ use function sys_get_temp_dir;
 use function touch;
 use function uniqid;
 use function unlink;
+use function usleep;
 
 use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
@@ -170,6 +171,38 @@ class PhpServerTest extends TestCase
         $server->stop();
 
         $this->assertSame('clean', $output);
+    }
+
+    /** @requires function posix_kill */
+    public function testStopReportsAServerThatDiedOnItsOwn(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
+        $server->start();
+        curl_exec($this->ch);
+        // The connection drops before the process has finished exiting.
+        usleep(500_000);
+
+        $message = '';
+        try {
+            $server->stop();
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertStringStartsWith('Server exited with code 137', $message);
+        $server->stop();
+    }
+
+    /** @requires function posix_kill */
+    public function testStartAgainAfterTheServerDied(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
+        $server->start();
+        curl_exec($this->ch);
+        $server->start();
+        $server->stop();
+
+        $this->assertSame('', (string) curl_exec($this->ch));
     }
 
     /** The command is passed as an argument list, so the path is never parsed by a shell. */
