@@ -12,6 +12,7 @@ use function explode;
 use function fclose;
 use function file_get_contents;
 use function filesize;
+use function fopen;
 use function fsockopen;
 use function implode;
 use function is_dir;
@@ -107,11 +108,13 @@ final class PhpServer
             throw new RuntimeException(sprintf('%s is already in use', $this->host));
         }
 
-        $process = proc_open($this->command, [
-            0 => ['pipe', 'r'],
-            1 => ['file', $this->logFile, 'a'],
-            2 => ['redirect', 1],
-        ], $pipes);
+        $log = fopen($this->logFile, 'a');
+        if ($log === false) {
+            throw new RuntimeException(sprintf('Could not open the log file: %s', $this->logFile)); // @codeCoverageIgnore
+        }
+
+        $process = proc_open($this->command, [0 => ['pipe', 'r'], 1 => $log, 2 => $log], $pipes);
+        fclose($log);
         if ($process === false) {
             throw new RuntimeException(sprintf('Could not start the server on %s', $this->host)); // @codeCoverageIgnore
         }
