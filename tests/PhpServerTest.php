@@ -178,9 +178,7 @@ class PhpServerTest extends TestCase
     {
         $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
         $server->start();
-        curl_exec($this->ch);
-        // The connection drops before the process has finished exiting.
-        usleep(500_000);
+        $this->killServer();
 
         $message = '';
         try {
@@ -198,11 +196,21 @@ class PhpServerTest extends TestCase
     {
         $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
         $server->start();
-        curl_exec($this->ch);
+        $this->killServer();
         $server->start();
+        $output = curl_exec($this->ch);
         $server->stop();
 
-        $this->assertSame('', (string) curl_exec($this->ch));
+        $this->assertSame('alive', $output);
+    }
+
+    private function killServer(): void
+    {
+        curl_setopt($this->ch, CURLOPT_URL, 'http://127.0.0.1:8099/die');
+        curl_exec($this->ch);
+        curl_setopt($this->ch, CURLOPT_URL, 'http://127.0.0.1:8099/');
+        // The connection drops before the process has finished exiting.
+        usleep(500_000);
     }
 
     /** The command is passed as an argument list, so the path is never parsed by a shell. */
