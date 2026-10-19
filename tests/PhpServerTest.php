@@ -10,17 +10,20 @@ use ReflectionMethod;
 use RuntimeException;
 
 use function chmod;
+use function copy;
 use function curl_exec;
 use function curl_init;
 use function curl_setopt;
 use function file_get_contents;
 use function file_put_contents;
 use function mkdir;
+use function putenv;
 use function rmdir;
 use function sys_get_temp_dir;
 use function touch;
 use function uniqid;
 use function unlink;
+use function usleep;
 
 use const CURLOPT_RETURNTRANSFER;
 use const CURLOPT_TIMEOUT;
@@ -37,6 +40,8 @@ class PhpServerTest extends TestCase
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_TIMEOUT, 3);
         $this->ch = $ch;
+        // With workers, /die kills a worker and the server itself keeps running.
+        putenv('PHP_CLI_SERVER_WORKERS');
 
         parent::setUp();
     }
@@ -117,6 +122,20 @@ class PhpServerTest extends TestCase
         }
     }
 
+    public function testStartTwiceFails(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/index.php');
+        $server->start();
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Server on 127.0.0.1:8099 is already running');
+            $server->start();
+        } finally {
+            $server->stop();
+        }
+    }
+
     public function testStopIsIdempotent(): void
     {
         $this->expectNotToPerformAssertions();
@@ -161,14 +180,73 @@ class PhpServerTest extends TestCase
         }
     }
 
-    public function testServerEnvironmentIsNamespaced(): void
+    public function testServerEnvironmentIsLeftAlone(): void
     {
         $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/env.php');
         $server->start();
         $output = curl_exec($this->ch);
         $server->stop();
 
-        $this->assertSame('127.0.0.1:8099|clean', $output);
+        $this->assertSame('clean', $output);
+    }
+
+    /** @requires function posix_kill */
+    public function testStopReportsAServerThatDiedOnItsOwn(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
+        $server->start();
+        $this->killServer();
+
+        $message = '';
+        try {
+            $server->stop();
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertStringStartsWith('Server exited with code 137', $message);
+        $server->stop();
+    }
+
+    /** @requires function posix_kill */
+    public function testStartAgainAfterTheServerDied(): void
+    {
+        $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/die.php');
+        $server->start();
+        $this->killServer();
+        $server->start();
+        $output = curl_exec($this->ch);
+        $server->stop();
+
+        $this->assertSame('alive', $output);
+    }
+
+    private function killServer(): void
+    {
+        curl_setopt($this->ch, CURLOPT_URL, 'http://127.0.0.1:8099/die');
+        curl_exec($this->ch);
+        curl_setopt($this->ch, CURLOPT_URL, 'http://127.0.0.1:8099/');
+        // The connection drops before the process has finished exiting.
+        usleep(500_000);
+    }
+
+    /** The command is passed as an argument list, so the path is never parsed by a shell. */
+    public function testDocrootWithShellCharacters(): void
+    {
+        $dir = sys_get_temp_dir() . '/php-server-' . uniqid() . " a b%PATH%!\$'";
+        mkdir($dir);
+        copy(__DIR__ . '/Fake/index.php', $dir . '/index.php');
+
+        try {
+            $server = new PhpServer('127.0.0.1:8099', $dir);
+            $server->start();
+            $output = curl_exec($this->ch);
+            $server->stop();
+            $this->assertSame('Hello World', $output);
+        } finally {
+            unlink($dir . '/index.php');
+            rmdir($dir);
+        }
     }
 
     /** The tail is read from a file that another process writes, so it can be gone by then. */
