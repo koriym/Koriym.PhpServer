@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Koriym\PhpServer;
 
 use RuntimeException;
-use Symfony\Component\Process\Process;
 
 use function array_slice;
 use function dirname;
@@ -21,6 +20,10 @@ use function is_resource;
 use function is_writable;
 use function max;
 use function microtime;
+use function proc_close;
+use function proc_get_status;
+use function proc_open;
+use function proc_terminate;
 use function register_shutdown_function;
 use function sprintf;
 use function strrpos;
@@ -31,7 +34,6 @@ use function trim;
 use function unlink;
 use function usleep;
 
-use const DIRECTORY_SEPARATOR;
 use const PHP_BINARY;
 use const PHP_EOL;
 
@@ -40,11 +42,17 @@ final class PhpServer
     private const START_TIMEOUT_SECONDS = 5.0;
     private const LOG_TAIL_LINES = 20;
     private const LOG_TAIL_BYTES = 64 * 1024;
+    private const STOP_TIMEOUT_SECONDS = 5.0;
+    private const SIGKILL = 9;
 
-    private Process $process;
+    /** @var list<string> */
+    private array $command;
+
+    /** @var resource|null */
+    private $process = null;
+    private int|null $exitCode = null;
     private string $logFile;
     private bool $ownsLogFile;
-    private bool $stopped = false;
 
     /**
      * Server output goes to $logFile rather than to a pipe. A pipe that nobody reads fills up
@@ -56,32 +64,19 @@ final class PhpServer
         string|null $phpBinary = null,
         string|null $logFile = null,
     ) {
-        $phpBinary ??= PHP_BINARY;
         $this->ownsLogFile = $logFile === null;
         $this->logFile = $logFile ?? $this->tempLogFile();
         $this->assertLogFileIsWritable();
-        // Placeholders let Symfony Process quote each value for the platform; escapeshellarg()
-        // would replace % and ! with spaces on Windows. The names are also exported to the
-        // server process, so they carry the package prefix to keep them out of the application.
-        $target = is_dir($docroot) ? '-t "${:KORIYM_PHP_SERVER_DOCROOT}"' : '"${:KORIYM_PHP_SERVER_DOCROOT}"';
-        $command = sprintf(
-            '"${:KORIYM_PHP_SERVER_BINARY}" -S "${:KORIYM_PHP_SERVER_HOST}" %s >> "${:KORIYM_PHP_SERVER_LOG_FILE}" 2>&1',
-            $target,
-        );
-        // exec replaces the shell so that stop() signals PHP itself, not sh.
-        $this->process = Process::fromShellCommandline(
-            DIRECTORY_SEPARATOR === '\\' ? $command : 'exec ' . $command,
-            null,
-            [
-                'KORIYM_PHP_SERVER_BINARY' => $phpBinary,
-                'KORIYM_PHP_SERVER_HOST' => $host,
-                'KORIYM_PHP_SERVER_DOCROOT' => $docroot,
-                'KORIYM_PHP_SERVER_LOG_FILE' => $this->logFile,
-            ],
-        );
+        // An argument list bypasses the shell, so nothing needs quoting and stop() signals PHP itself.
+        $this->command = is_dir($docroot)
+            ? [$phpBinary ?? PHP_BINARY, '-S', $host, '-t', $docroot]
+            : [$phpBinary ?? PHP_BINARY, '-S', $host, $docroot];
         register_shutdown_function(function (): void {
             // @codeCoverageIgnoreStart
-            $this->process->stop();
+            if ($this->process !== null) {
+                $this->terminate($this->process);
+            }
+
             // @codeCoverageIgnoreEnd
         });
     }
@@ -103,35 +98,44 @@ final class PhpServer
             throw new RuntimeException(sprintf('%s is already in use', $this->host));
         }
 
-        $this->process->start();
-        $this->stopped = false;
-        $this->waitUntilListening();
+        $process = proc_open($this->command, [
+            0 => ['pipe', 'r'],
+            1 => ['file', $this->logFile, 'a'],
+            2 => ['redirect', 1],
+        ], $pipes);
+        if ($process === false) {
+            throw new RuntimeException(sprintf('Could not start the server on %s', $this->host)); // @codeCoverageIgnore
+        }
+
+        fclose($pipes[0]);
+        $this->process = $process;
+        $this->exitCode = null;
+        $this->waitUntilListening($process);
     }
 
     /**
-     * Stopping twice is harmless: a stop requested by this class is remembered, and a server
-     * that was never started is left alone.
+     * Stopping twice is harmless, and a server that was never started is left alone.
      *
      * @throws RuntimeException When the server died on its own before being stopped.
      */
     public function stop(): void
     {
-        if (! $this->process->isStarted() || $this->stopped) {
+        $process = $this->process;
+        if ($process === null) {
             return;
         }
 
-        if (! $this->process->isRunning()) {
+        if (! $this->isRunning($process)) {
             // @codeCoverageIgnoreStart
             throw new RuntimeException(sprintf(
                 'Server exited with code %s: %s',
-                (string) $this->process->getExitCode(),
+                (string) $this->exitCode,
                 $this->logTail(),
             ));
             // @codeCoverageIgnoreEnd
         }
 
-        $this->process->stop();
-        $this->stopped = true;
+        $this->terminate($process);
     }
 
     public function getLogFile(): string
@@ -139,13 +143,14 @@ final class PhpServer
         return $this->logFile;
     }
 
-    private function waitUntilListening(): void
+    /** @param resource $process */
+    private function waitUntilListening($process): void
     {
         $deadline = microtime(true) + self::START_TIMEOUT_SECONDS;
         while (microtime(true) < $deadline) {
-            if (! $this->process->isRunning()) {
+            if (! $this->isRunning($process)) {
                 // The failure is reported here, so a later stop() from cleanup has nothing to add.
-                $this->stopped = true;
+                $this->terminate($process);
 
                 throw new RuntimeException(sprintf('Server exited during start-up: %s', $this->logTail()));
             }
@@ -158,11 +163,53 @@ final class PhpServer
         }
 
         // @codeCoverageIgnoreStart
-        $this->process->stop();
-        $this->stopped = true;
+        $this->terminate($process);
 
         throw new RuntimeException(sprintf('Server did not start listening on %s: %s', $this->host, $this->logTail()));
         // @codeCoverageIgnoreEnd
+    }
+
+    /**
+     * proc_get_status() reports the exit code only on the first call after the exit, so it is kept.
+     *
+     * @param resource $process
+     *
+     * @phpstan-impure
+     */
+    private function isRunning($process): bool
+    {
+        $status = proc_get_status($process);
+        if (! $status['running'] && $this->exitCode === null) {
+            $this->exitCode = $status['exitcode'];
+        }
+
+        return $status['running'];
+    }
+
+    /**
+     * SIGTERM first, SIGKILL if the server does not exit in time. Windows terminates at once.
+     *
+     * @param resource $process
+     */
+    private function terminate($process): void
+    {
+        if ($this->isRunning($process)) {
+            proc_terminate($process);
+            $deadline = microtime(true) + self::STOP_TIMEOUT_SECONDS;
+            while ($this->isRunning($process)) {
+                if (microtime(true) >= $deadline) {
+                    // @codeCoverageIgnoreStart
+                    proc_terminate($process, self::SIGKILL);
+                    break;
+                    // @codeCoverageIgnoreEnd
+                }
+
+                usleep(20_000);
+            }
+        }
+
+        proc_close($process);
+        $this->process = null;
     }
 
     private function isListening(): bool

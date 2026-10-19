@@ -10,6 +10,7 @@ use ReflectionMethod;
 use RuntimeException;
 
 use function chmod;
+use function copy;
 use function curl_exec;
 use function curl_init;
 use function curl_setopt;
@@ -161,14 +162,33 @@ class PhpServerTest extends TestCase
         }
     }
 
-    public function testServerEnvironmentIsNamespaced(): void
+    public function testServerEnvironmentIsLeftAlone(): void
     {
         $server = new PhpServer('127.0.0.1:8099', __DIR__ . '/Fake/env.php');
         $server->start();
         $output = curl_exec($this->ch);
         $server->stop();
 
-        $this->assertSame('127.0.0.1:8099|clean', $output);
+        $this->assertSame('clean', $output);
+    }
+
+    /** The command is passed as an argument list, so the path is never parsed by a shell. */
+    public function testDocrootWithShellCharacters(): void
+    {
+        $dir = sys_get_temp_dir() . '/php-server-' . uniqid() . " a b%PATH%!\$'";
+        mkdir($dir);
+        copy(__DIR__ . '/Fake/index.php', $dir . '/index.php');
+
+        try {
+            $server = new PhpServer('127.0.0.1:8099', $dir);
+            $server->start();
+            $output = curl_exec($this->ch);
+            $server->stop();
+            $this->assertSame('Hello World', $output);
+        } finally {
+            unlink($dir . '/index.php');
+            rmdir($dir);
+        }
     }
 
     /** The tail is read from a file that another process writes, so it can be gone by then. */
